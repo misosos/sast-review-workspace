@@ -27,6 +27,7 @@ Language: the pages under "Start here" are in English. Research records and the 
 - [Frozen-state limitations](research/frozen-state-known-limitations.md): defects recorded during the 2026-11 closing review, with a note on what has since been fixed
 - Synthetic detection benchmarks: [6A](phase6a-independent-detection-benchmark.md), [6D](phase6d-sast-generalization-evaluation.md), [6E](phase6e-heldout-sast-evaluation.md)
 - [Browser security validation](phase5d-browser-security-validation.md)
+- [Untrusted repository scan hardening (A4)](a4-untrusted-scan-git-hardening.md): a target's Git configuration can no longer run commands during a scan; scan-scope changes
 - Isolation design, not built: [Phase 7C-1B](phase7c1b-verifiable-worker-design.md)
 
 ## Research results (D1, D2, U1)

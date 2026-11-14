@@ -32,7 +32,9 @@ from ai_code_security_analyzer.taint_evidence import TaintEvidence, build_taint_
 MAX_OUTPUT_BYTES = 2_000_000
 SCAN_TIMEOUT_SECONDS = 60
 PROBE_TIMEOUT_SECONDS = 10
-_REQUIRED_OPTIONS = ("--json", "--metrics", "--disable-version-check", "--oss-only", "--no-autofix")
+_REQUIRED_OPTIONS = (
+    "--json", "--metrics", "--disable-version-check", "--oss-only", "--no-autofix", "--no-git-ignore",
+)
 _VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+\b")
 _FIRESTORE_RULE_ID = "baseline.firestore-unconditional-write"
 _FIRESTORE_CONTEXT_MAX_BYTES = 1_000_000
@@ -293,6 +295,19 @@ def _run_process(args: list[str], cwd: Path, env: dict[str, str], timeout: int) 
         process.stderr.close()
 
 
+def _git_isolation_environment(private_directory: Path) -> dict[str, str]:
+    """Keep any Git process started below Semgrep away from target-controlled configuration.
+
+    A scan target is untrusted data, and Git runs commands named in a
+    repository's own configuration (for example ``core.fsmonitor``).  The scan
+    passes ``--no-git-ignore`` so Semgrep does not ask Git for the file list.
+    As a second, independent layer, ``GIT_DIR`` names a path that never exists,
+    so a Git process that is started anyway cannot discover the target (or a
+    parent of it) as a repository and never loads its configuration.
+    """
+    return {"GIT_DIR": str(private_directory / "git-disabled")}
+
+
 class SemgrepAdapter:
     """Run a scan with rules from a separately trusted local directory."""
 
@@ -338,6 +353,7 @@ class SemgrepAdapter:
                 "XDG_CACHE_HOME": temporary_home,
                 "SEMGREP_SEND_METRICS": "off",
                 "SEMGREP_ENABLE_VERSION_CHECK": "0",
+                **_git_isolation_environment(Path(temporary_home)),
             }
             try:
                 version_result = _run_process([executable, "--version"], project_root, env, PROBE_TIMEOUT_SECONDS)
@@ -353,7 +369,7 @@ class SemgrepAdapter:
                     return _ScanOutput(ScanResult(ScanStatus.EXECUTION_FAILED, issues=("verbose_option_unsupported",), semgrep_version=version))
                 args = [
                     executable, "scan", "--json", "--metrics=off", "--disable-version-check",
-                    "--oss-only", "--no-autofix", "--config", rules.name, "--", str(project),
+                    "--oss-only", "--no-autofix", "--no-git-ignore", "--config", rules.name, "--", str(project),
                 ]
                 if investigation_verbose:
                     args.insert(2, "--verbose")
