@@ -31,7 +31,15 @@ MAX_STRUCTURAL_COUNT = 10_000
 _SCAN_REF = re.compile(r"\A[A-Za-z0-9_-]{32,64}\Z")
 _SAFE_ID = re.compile(r"\A[A-Za-z0-9_-]{1,64}\Z")
 _FINDING_ID = re.compile(r"\Asemgrep:[a-f0-9]{24}\Z")
-_KNOWN_SKIP_REASONS = frozenset({"semgrepignore_patterns_match"})
+# Names the adapter itself always excludes (``--exclude``), at any depth: version
+# control metadata and installed dependency trees. A target's ignore files cannot
+# re-include them. Normal source folders are deliberately absent, including
+# build outputs, so nothing is dropped only because Git ignores it.
+ADAPTER_EXCLUDED_NAMES = (".git", "node_modules", ".venv")
+ADAPTER_POLICY_SKIP_REASON = "adapter_policy_exclusion"
+_IGNORE_FILE_SKIP_REASON = "semgrepignore_patterns_match"
+_SEMGREP_CLI_EXCLUDE_REASON = "cli_exclude_flags_match"
+_KNOWN_SKIP_REASONS = frozenset({_IGNORE_FILE_SKIP_REASON, ADAPTER_POLICY_SKIP_REASON})
 
 
 class EvidenceStatus(StrEnum):
@@ -109,6 +117,40 @@ class ManifestBindingError(ValueError):
 def new_scan_ref() -> str:
     """Create a fresh opaque identifier; it is not a durable run registry."""
     return secrets.token_urlsafe(24)
+
+
+def _is_adapter_excluded_path(path: str) -> bool:
+    return path.rsplit("/", 1)[-1] in ADAPTER_EXCLUDED_NAMES
+
+
+def classify_reported_skip(path: str, semgrep_reason: object) -> str | None:
+    """Map one Semgrep-reported skip to a stored reason code, or None when unrecognized.
+
+    A path named like an adapter exclusion is excluded by the adapter whichever
+    filter Semgrep credits, so it is recorded as the adapter's policy. Semgrep's
+    CLI-exclude reason on any other path was not requested by the adapter and
+    stays unrecognized, like every reason outside this closed set.
+    """
+    if semgrep_reason == _SEMGREP_CLI_EXCLUDE_REASON:
+        return ADAPTER_POLICY_SKIP_REASON if _is_adapter_excluded_path(path) else None
+    if semgrep_reason == _IGNORE_FILE_SKIP_REASON:
+        return ADAPTER_POLICY_SKIP_REASON if _is_adapter_excluded_path(path) else _IGNORE_FILE_SKIP_REASON
+    return None
+
+
+def stored_skip_is_valid(path: object, reason_code: object) -> bool:
+    """A stored skip is valid only in the one form ``classify_reported_skip`` produces."""
+    if not isinstance(path, str) or not isinstance(reason_code, str) or reason_code not in _KNOWN_SKIP_REASONS:
+        return False
+    return (reason_code == ADAPTER_POLICY_SKIP_REASON) is _is_adapter_excluded_path(path)
+
+
+def only_adapter_policy_exclusions(scope: "ScopeEvidence") -> bool:
+    """True when every skipped path was validated and is an adapter-owned exclusion."""
+    return scope.skipped_status is EvidenceStatus.OBSERVED and all(
+        item.reason_code == ADAPTER_POLICY_SKIP_REASON and stored_skip_is_valid(item.path, item.reason_code)
+        for item in scope.skipped_paths
+    )
 
 
 def _invalid_scope(
@@ -269,7 +311,8 @@ def parse_scope_evidence(document: dict[str, Any], project_root: Path) -> ScopeE
                 if path is None:
                     invalid_reason = "skipped_path_invalid"
                     break
-                if not isinstance(reason, str) or reason not in _KNOWN_SKIP_REASONS:
+                reason_code = classify_reported_skip(path, reason)
+                if reason_code is None:
                     invalid_reason = "skipped_reason_unrecognized"
                     break
                 key = unicodedata.normalize("NFC", path)
@@ -281,7 +324,7 @@ def parse_scope_evidence(document: dict[str, Any], project_root: Path) -> ScopeE
                 if total_bytes > MAX_SCOPE_BYTES:
                     invalid_reason = "scope_byte_limit_exceeded"
                     break
-                skipped_result.append(SkippedPathEvidence(path, reason))
+                skipped_result.append(SkippedPathEvidence(path, reason_code))
             if invalid_reason is None:
                 skipped_status = EvidenceStatus.OBSERVED
                 skipped_paths = tuple(skipped_result)

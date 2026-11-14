@@ -49,7 +49,7 @@ ScanService는 요청 allowlist 재검증 후 매 실행마다 `secrets.token_ur
 - `paths` 누락 또는 `scanned` 누락: `NOT_COLLECTED`.
 - `paths`/`scanned` 구조 오류, 부적합 경로, 중복 경로, NFC 정규화 충돌 또는 한도 초과: `UNAVAILABLE`. 유효한 일부 항목만 골라 완전한 목록처럼 표시하지 않습니다. JSON 배열 길이는 구조상 안전한 경우 보고된 count로 남을 수 있습니다.
 - 절대경로 입력은 허용된 프로젝트 루트 아래인지 확인한 뒤 상대 식별자로 바꿉니다. 절대 경로는 저장하지 않습니다. 상대 경로의 `.`/`..`, 빈 구간, Windows 역슬래시/drive 형식, 제어문자 및 현재 확인되는 symlink 구성 요소는 거부합니다.
-- `paths.skipped`: 필드가 현재 JSON에 실제 있는 경우만 처리합니다. 경로와 reason을 검증하고, 현재 1.182.1 합성 조사에서 확인한 `semgrepignore_patterns_match`만 허용합니다. 알 수 없는 자유형 reason 또는 한 경로 오류가 있으면 skipped 목록 전체를 `UNAVAILABLE`로 처리하고 reason 문구는 버립니다.
+- `paths.skipped`: 필드가 현재 JSON에 실제 있는 경우만 처리합니다. 경로와 reason을 검증하고, 현재 1.182.1 합성 조사에서 확인한 `semgrepignore_patterns_match`만 허용합니다. 알 수 없는 자유형 reason 또는 한 경로 오류가 있으면 skipped 목록 전체를 `UNAVAILABLE`로 처리하고 reason 문구는 버립니다. A4-R1부터 어댑터가 항상 제외하는 이름(`.git`, `node_modules`, `.venv`)은 별도 코드 `adapter_policy_exclusion`으로 기록하며, 이 코드만 있는 실행은 `partial`이 되지 않습니다. 근거와 분류표는 [A4 기록](a4-untrusted-scan-git-hardening.md)에 있습니다.
 - `skipped_rules`, `errors`: 원소 내용은 저장하지 않고, 제한된 list 구조의 count만 기록합니다. 오류 메시지, 규칙 본문 및 raw JSON은 Manifest에 복사하지 않습니다.
 
 기본 실행은 기존처럼 `--verbose`를 사용하지 않습니다. 따라서 현재 실행에서 `paths.skipped`가 없으면 `NOT_COLLECTED`이며 “제외된 경로 없음”이 아닙니다. Semgrep 1.182.1 합성 테스트에서 `.semgrepignore`로 제외한 파일은 `paths.scanned`에 없었고 비-verbose JSON에 `paths.skipped`가 없었습니다. 제품은 그 제외 원인을 알아냈다고 주장하지 않습니다.

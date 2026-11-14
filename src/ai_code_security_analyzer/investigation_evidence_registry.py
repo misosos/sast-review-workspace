@@ -74,6 +74,12 @@ _MANIFEST_LIMITATIONS = frozenset({
     "scope_evidence_unavailable", "scope_evidence_not_collected",
     "rule_bytes_identity_unverified", "semgrep_loaded_rule_identity_unverified",
     "source_snapshot_not_collected",
+    # Reasons recorded when a scan produced no usable scope evidence (timeout,
+    # output limit, unparsable output, capture failure). Such a run must reach
+    # the evaluator and be judged incomplete, not fail while being read back.
+    "semgrep_json_not_collected", "semgrep_timeout_without_json", "semgrep_output_limit",
+    "invalid_json_after_failed_execution", "invalid_json", "scope_capture_failed",
+    "adapter_scope_evidence_not_provided", "manifest_capture_failed",
 })
 
 

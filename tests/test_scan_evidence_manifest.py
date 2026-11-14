@@ -8,12 +8,15 @@ from pathlib import Path
 import pytest
 
 from ai_code_security_analyzer.scan_evidence_manifest import (
+    ADAPTER_EXCLUDED_NAMES,
     EvidenceStatus,
     ManifestBindingError,
     ScanEvidenceManifest,
     create_scan_evidence_manifest,
     new_scan_ref,
+    only_adapter_policy_exclusions,
     parse_scope_evidence,
+    stored_skip_is_valid,
     validate_manifest_binding,
 )
 from ai_code_security_analyzer.semgrep_adapter import ScanStatus
@@ -159,6 +162,68 @@ def test_skips_are_not_collected_unless_present_and_allowlisted(tmp_path: Path) 
     assert unknown.skipped_status is EvidenceStatus.UNAVAILABLE
     assert unknown.skipped_paths == ()
     assert "arbitrary message with source" not in repr(unknown)
+
+
+def _skips(tmp_path: Path, *items: tuple[str, str]) -> object:
+    return parse_scope_evidence(
+        semgrep_document(paths={"scanned": [], "skipped": [{"path": path, "reason": reason} for path, reason in items]}),
+        tmp_path,
+    )
+
+
+def test_adapter_owned_exclusions_are_recorded_under_their_own_reason(tmp_path: Path) -> None:
+    scope = _skips(
+        tmp_path,
+        ("node_modules", "cli_exclude_flags_match"),
+        ("packages/a/node_modules", "cli_exclude_flags_match"),
+        (".venv", "cli_exclude_flags_match"),
+        # Without a project ignore file Semgrep credits its default list for .git.
+        (".git", "semgrepignore_patterns_match"),
+        ("legacy/old.js", "semgrepignore_patterns_match"),
+    )
+    assert scope.skipped_status is EvidenceStatus.OBSERVED
+    assert [(item.path, item.reason_code) for item in scope.skipped_paths] == [
+        ("node_modules", "adapter_policy_exclusion"),
+        ("packages/a/node_modules", "adapter_policy_exclusion"),
+        (".venv", "adapter_policy_exclusion"),
+        (".git", "adapter_policy_exclusion"),
+        ("legacy/old.js", "semgrepignore_patterns_match"),
+    ]
+    assert only_adapter_policy_exclusions(scope) is False
+    assert only_adapter_policy_exclusions(_skips(tmp_path, (".git", "cli_exclude_flags_match"))) is True
+
+
+@pytest.mark.parametrize(
+    "path, reason",
+    [
+        # A CLI exclusion the adapter never asked for.
+        ("src", "cli_exclude_flags_match"),
+        ("node_modules.js", "cli_exclude_flags_match"),
+        ("venv", "cli_exclude_flags_match"),
+        ("node_modules/pkg", "cli_exclude_flags_match"),
+        # Reasons outside the closed set, even on an excluded name.
+        ("node_modules", "analysis_failed_parser_or_internal_error"),
+        ("src/big.js", "too_big"),
+        (".git", "adapter_policy_exclusion"),
+        (".git", ""),
+    ],
+)
+def test_unexpected_skips_stay_unrecognized(tmp_path: Path, path: str, reason: str) -> None:
+    scope = _skips(tmp_path, (".venv", "cli_exclude_flags_match"), (path, reason))
+    assert scope.skipped_status is EvidenceStatus.UNAVAILABLE
+    assert scope.skipped_paths == ()
+    assert "skipped_reason_unrecognized" in scope.limitations
+    assert only_adapter_policy_exclusions(scope) is False
+
+
+def test_stored_skip_reasons_have_one_canonical_form() -> None:
+    assert stored_skip_is_valid("a/node_modules", "adapter_policy_exclusion")
+    assert stored_skip_is_valid("src/old.js", "semgrepignore_patterns_match")
+    assert not stored_skip_is_valid("src/old.js", "adapter_policy_exclusion")
+    assert not stored_skip_is_valid("a/node_modules", "semgrepignore_patterns_match")
+    assert not stored_skip_is_valid("a/node_modules", "cli_exclude_flags_match")
+    assert not stored_skip_is_valid(None, "adapter_policy_exclusion")
+    assert ADAPTER_EXCLUDED_NAMES == (".git", "node_modules", ".venv")
 
 
 def test_skipped_paths_are_path_validated_and_bounded(tmp_path: Path) -> None:

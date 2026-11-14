@@ -10,6 +10,7 @@ from typing import Any
 from ai_code_security_analyzer.models import Finding, Severity
 from ai_code_security_analyzer.scan_evidence_manifest import (
     ScopeEvidence,
+    only_adapter_policy_exclusions,
     parse_scope_evidence,
     unavailable_scope_evidence,
 )
@@ -148,8 +149,17 @@ def _parse_semgrep_json_internal(raw: bytes, project_root: Path) -> _ParsedSemgr
     if skipped_rules:
         issues.append("semgrep_skipped_rules")
     paths = document.get("paths")
+    try:
+        scope_evidence = parse_scope_evidence(document, project_root)
+    except Exception:
+        # Scope capture is supplemental. Never discard parsed findings because
+        # an auxiliary path observation could not be represented safely.
+        scope_evidence = unavailable_scope_evidence("scope_capture_failed")
     if isinstance(paths, dict):
-        if paths.get("skipped"):
+        # The adapter's own fixed exclusions are part of every scan and are
+        # recorded in the scope evidence. Any other skip, and any skip list
+        # that could not be validated, still makes the scan partial.
+        if paths.get("skipped") and not only_adapter_policy_exclusions(scope_evidence):
             issues.append("semgrep_skipped_paths")
         if paths.get("scanned") == []:
             issues.append("no_files_scanned")
@@ -161,12 +171,6 @@ def _parse_semgrep_json_internal(raw: bytes, project_root: Path) -> _ParsedSemgr
         if issue is not None:
             issues.append(f"result_{index}_{issue}")
     parsed = ParsedFindings(tuple(findings), tuple(issues))
-    try:
-        scope_evidence = parse_scope_evidence(document, project_root)
-    except Exception:
-        # Scope capture is supplemental. Never discard parsed findings because
-        # an auxiliary path observation could not be represented safely.
-        scope_evidence = unavailable_scope_evidence("scope_capture_failed")
     return _ParsedSemgrepDocument(parsed, document, tuple(result_findings), scope_evidence)
 
 
