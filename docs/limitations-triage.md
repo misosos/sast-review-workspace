@@ -29,7 +29,7 @@ Policy: confirmed bugs and maintenance are allowed; security and reproducibility
 | Investigation over-abstention (S5a) | C | 4 | Open |
 | No Git integration or rename linking | C | 4 | Open |
 | No execution sandbox | C | 2 | Open; design exists, nothing built |
-| Scan scope ignores Git; dependency folders and `partial` investigation scans on Git repositories | C | 3 | Open; trade-off of the [A4 hardening](a4-untrusted-scan-git-hardening.md), which proposes an explicit exclusion list |
+| Scan scope ignores Git; default-ignored build outputs make investigation scans of Git repositories `partial` | C | 3 | Open; remaining trade-off of the [A4 hardening](a4-untrusted-scan-git-hardening.md). Dependency folders are handled by adapter exclusions |
 | No automatic proof of remediation | D | — | Kept |
 | Rescan requires confirmation | D | — | Kept |
 | Failed or partial rescans keep the previous result | D | — | Kept |

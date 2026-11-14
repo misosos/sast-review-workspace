@@ -53,6 +53,41 @@ def test_empty_results_are_valid(tmp_path: Path) -> None:
     assert parsed.issues == ()
 
 
+def _issues_for_skips(tmp_path: Path, skipped: object) -> tuple[str, ...]:
+    raw = json.dumps({"results": [], "errors": [], "paths": {"scanned": ["src/app.js"], "skipped": skipped}}).encode()
+    return parse_semgrep_json(raw, tmp_path).issues
+
+
+def test_adapter_owned_exclusions_alone_do_not_make_a_scan_partial(tmp_path: Path) -> None:
+    assert _issues_for_skips(tmp_path, [
+        {"path": ".git", "reason": "semgrepignore_patterns_match"},
+        {"path": "node_modules", "reason": "cli_exclude_flags_match"},
+        {"path": "packages/a/.venv", "reason": "cli_exclude_flags_match"},
+    ]) == ()
+
+
+@pytest.mark.parametrize(
+    "skipped",
+    [
+        # A project ignore rule next to the adapter's exclusions.
+        [{"path": "node_modules", "reason": "cli_exclude_flags_match"},
+         {"path": "legacy/old.js", "reason": "semgrepignore_patterns_match"}],
+        # A CLI exclusion on a path the adapter does not exclude.
+        [{"path": "src", "reason": "cli_exclude_flags_match"}],
+        # A reason outside the closed set.
+        [{"path": "src/broken.ts", "reason": "analysis_failed_parser_or_internal_error"}],
+        [{"path": "node_modules", "reason": "too_big"}],
+        # Malformed entries and structures.
+        [{"path": "node_modules"}],
+        [{"path": "../node_modules", "reason": "cli_exclude_flags_match"}],
+        ["node_modules"],
+        {"path": "node_modules", "reason": "cli_exclude_flags_match"},
+    ],
+)
+def test_any_other_skip_still_makes_a_scan_partial(tmp_path: Path, skipped: object) -> None:
+    assert _issues_for_skips(tmp_path, skipped) == ("semgrep_skipped_paths",)
+
+
 def test_skipped_rules_or_paths_are_partial_evidence(tmp_path: Path) -> None:
     raw = json.dumps({
         "results": [], "errors": [], "skipped_rules": [{"id": "local.bad"}],

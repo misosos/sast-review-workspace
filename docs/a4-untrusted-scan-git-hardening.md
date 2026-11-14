@@ -38,30 +38,83 @@ Rejected alternatives:
 | A failing `git` earlier in `PATH` | Works, but needs an executable written at scan time; `GIT_DIR` gives the same effect with one variable |
 | Ignore `.semgrepignore` too (`--x-ignore-semgrepignore-files`) | Internal flag; would break the investigation skip evidence the product reports |
 
+## Scope policy (A4-R1)
+
+Dropping Git removed two things Git used to do silently: hide dependency folders, and keep `.git` out of the reported skips. The adapter now owns that part of the scope explicitly.
+
+**Adapter exclusions.** Every scan passes `--exclude` for exactly three names, at any depth: `.git`, `node_modules`, `.venv`. They are version-control metadata and installed dependency trees. `ADAPTER_EXCLUDED_NAMES` in `scan_evidence_manifest.py` is the single definition. A Semgrep without `--exclude` fails closed.
+
+Verified with Semgrep 1.182.1:
+
+- A project `.semgrepignore` cannot re-include them. Negations (`!node_modules/`, `!node_modules/**`, `!**/node_modules/**`, `!.venv/`, `!.git/`) had no effect, written in the file or pulled in with `:include` from outside the target.
+- Only the exact names match. `node_modules.js`, `.venv.js`, `venv/`, `my.venv/`, `git/` and `src/node_modules_helper/` are scanned.
+- Source that Git ignores is still scanned. No folder is excluded because of `.gitignore`.
+
+**Not excluded: build outputs.** `dist/`, `build/`, `coverage/` and similar names can hold ordinary source, and an adapter exclusion cannot be undone by the project. They stay under Semgrep's ignore rules: skipped by Semgrep's default list, scanned when the project supplies its own `.semgrepignore` that does not list them.
+
+**How skips are classified.** Semgrep reports skipped paths only in the verbose investigation run. Each one is stored under a closed reason:
+
+| Reported by Semgrep | Stored as | Effect on the scan |
+| --- | --- | --- |
+| A path named `.git`, `node_modules` or `.venv`, with Semgrep's CLI-exclude or ignore-file reason | `adapter_policy_exclusion` | none; recorded in the scope evidence |
+| Any other path with the ignore-file reason | `semgrepignore_patterns_match` | `partial` |
+| The CLI-exclude reason on any other path | not stored; skip list `UNAVAILABLE` (`skipped_reason_unrecognized`) | `partial` |
+| Any other reason, for example a parser failure | not stored; skip list `UNAVAILABLE` | `partial` |
+| Malformed or out-of-root entries | not stored; skip list `UNAVAILABLE` | `partial` |
+
+A scan is `completed` only when every reported skip is a validated adapter exclusion. The stored form is canonical: evidence that pairs an excluded name with another reason, or `adapter_policy_exclusion` with another path, is refused. The public `ScanResponse` and investigation responses are unchanged, and no new public code was added. `adapter_policy_exclusion` exists only in the process-local scope evidence.
+
+`completed` still does not mean every file was inspected. Scope completeness stays `UNVERIFIED`, the normal (non-verbose) scan records that skip details were not collected, and every response carries `scan_result_is_not_safety_proof`.
+
 ## Scan scope changes
 
-The public `ScanResponse` and investigation contracts are unchanged. What a scan covers changes for Git repositories:
+Compared with scanning through Git (before A4):
 
-- **Nothing previously scanned is lost.** In every fixture the new scanned set contained the old one.
-- **Gitignored files are now scanned**, for example a local-only source file, `coverage/`, `.next/`, `out/`, `target/`, `tmp/`. Findings there are new and their IDs are stable across repeated scans.
-- **The result no longer depends on `.gitignore`.** Deleting it, rewriting it to ignore everything, or removing `.git` gives the same scanned set. A folder scans the same whether or not it is a Git repository.
-- **Semgrep's built-in default ignore list still applies** when the project has no `.semgrepignore`: `node_modules/`, `.venv/`, `dist/`, `build/`, `vendor/`, `test/`, `tests/`, `*.min.js`, `.git/`.
-- **A project's own `.semgrepignore` still applies and replaces that default list.** If it does not list `node_modules/`, the dependency folder is now scanned, because Git no longer hides it. On a fixture with a real 141 MB `node_modules`, the scan went from 452 files in 4 s to 4,486 files in 38 s. A larger project can reach the 60 s limit and return `timed_out`. This is visible, not silent.
-- **Investigation (verbose) scans of a Git repository now return `partial`.** Semgrep reports `.git` as skipped, and it reports default-ignored folders that Git used to hide without a trace. The run is honest about the omission, and a comparison involving it is `INCOMPARABLE`. Before, such a scan returned `completed` while the same folders were unscanned.
+- **Nothing previously scanned is lost.**
+- **Gitignored files are scanned**, for example a local-only source file or `coverage/`. The result no longer depends on `.gitignore` or on the folder being a Git repository.
+- **Dependency folders stay out**, with or without a project `.semgrepignore`.
 
-Typical project without its own `.semgrepignore` (728 tracked files, real `node_modules`, built assets): 46 files in about 4 s before, 47 files in about 5 s after.
+Measured on a fixture with 728 tracked files, a real 141 MB `node_modules` and built assets:
 
-Proposed, not implemented: an explicit adapter-owned exclusion list (`node_modules/`, `.venv/`, `.git/`) passed with `--exclude`, so dependency folders stay out even when a project replaces the default list. It needs a decision first, because it changes which paths the product reports as skipped and adds a skip reason the evidence contract does not accept yet.
+| Project ignore file | Before A4 | A4 | A4-R1 |
+| --- | --- | --- | --- |
+| none | 46 files, ~4 s | 47 files, ~5 s | 47 files, ~4 s |
+| its own `.semgrepignore` | 452 files, ~4 s | 4,486 files, 28–38 s | 454 files, ~5 s |
+
+The extra files against "before A4" are gitignored build outputs.
+
+## Investigation compatibility
+
+Real HTTP investigation runs on a Git repository with dependency folders and a `.semgrepignore` full of negations:
+
+| Change between the two scans | Current scan | Comparison |
+| --- | --- | --- |
+| none | `completed` | `COMPARABLE`, `UNDETERMINED` |
+| file with a finding removed | `completed` | `COMPARABLE`, `UNDETERMINED`, `PATH_NOT_REPORTED` |
+| that file moved under `node_modules/` | `completed` | `COMPARABLE`, `UNDETERMINED`, `PATH_NOT_REPORTED` |
+| project ignore rule added for that file | `partial` | `INCOMPARABLE`, `PATH_EXPLICITLY_SKIPPED` |
+| unparsable file added | `partial` | `INCOMPARABLE` |
+| a default-ignored `dist/` appears | `partial` | `INCOMPARABLE` |
+| current scan times out | `timed_out` | `INCOMPARABLE` |
+
+No case reports a disappearance as explained or fixed.
+
+The timed-out row fixes a separate defect found in A3: the registry refused to read back the scope reasons recorded for failed scans (timeout, output limit, unparsable output), so evaluating such a run returned `503 internal_unavailable`. Those reasons were already accepted by the evaluator and are now accepted by the registry. Unknown reasons are still refused.
 
 ## Not covered
 
 - Semgrep still has no OS-level isolation. Scan untrusted repositories only inside a separately isolated environment.
-- `.semgrepignore` and inline `nosemgrep` comments are controlled by the target and can reduce coverage. They are not a safety boundary.
-- A `.semgrepignore` in a parent folder above the target is honoured when that parent is a Git repository.
+- `.semgrepignore` and inline `nosemgrep` comments are controlled by the target and can reduce coverage. In the normal scan this is not visible; in the investigation run an ignore-file skip makes the scan `partial`.
+- A `.semgrepignore` can be a link to a file outside the target or pull one in with `:include`. Semgrep reads that file. It can only add ignore rules, with the same effect as rules written in the target. The API rejects a linked ignore file with every other link; `:include` is not rejected.
+- A `.semgrepignore` in a parent folder above the target is honoured when that parent is a Git repository. A target that itself sits below a parent repository's `node_modules/` is excluded entirely and returns `partial` with no files scanned.
+- Git repositories that have a default-ignored build output on disk (`dist/`, `build/`) and no `.semgrepignore` are `partial` in the investigation run. Before A4, Git hid that folder and the run was `completed`.
+- A regular file named exactly `.git`, `node_modules` or `.venv` is excluded like a folder.
 - A hard link to a file outside the target is scanned as a normal file.
 - The adapter does not enforce Semgrep 1.182.1. The behaviour here was verified on that version only.
 - Git configuration keys other than those listed above were not exercised individually. The fix does not depend on the key, since no Git process reads the target's configuration.
 
 ## Verification
 
-`tests/test_untrusted_git_scan_hardening.py` builds each path above in a temporary directory and checks, with real Git and the real Semgrep subprocess, that the canary does not run, that no Git call touches the target, and that the vulnerable source file is still scanned and reported. A positive control first proves that plain Git does run the canary for each path. With the fix reverted, 9 of the 15 tests fail.
+- `tests/test_untrusted_git_scan_hardening.py` builds each Git-configuration path in a temporary directory and checks, with real Git and the real Semgrep subprocess, that the canary does not run, that no Git call touches the target, and that the vulnerable source file is still scanned and reported. A positive control first proves that plain Git does run the canary for each path.
+- `tests/test_scan_scope_policy.py` covers the scope policy and the investigation table above with the real Semgrep subprocess and the real HTTP API, including a control that removes the adapter exclusions and shows the dependency tree being scanned.
+- Unit tests in `tests/test_scan_evidence_manifest.py`, `tests/test_semgrep_parser.py`, `tests/test_finding_disappearance_evaluator.py` and `tests/test_investigation_evidence_registry.py` cover skip classification, the `partial` decision, refusal of non-canonical evidence, and failed-scan evidence.

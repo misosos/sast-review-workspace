@@ -21,6 +21,7 @@ from ai_code_security_analyzer.firestore_context import (
 )
 from ai_code_security_analyzer.models import Finding
 from ai_code_security_analyzer.scan_evidence_manifest import (
+    ADAPTER_EXCLUDED_NAMES,
     ScopeEvidence,
     not_collected_scope_evidence,
     unavailable_scope_evidence,
@@ -34,6 +35,7 @@ SCAN_TIMEOUT_SECONDS = 60
 PROBE_TIMEOUT_SECONDS = 10
 _REQUIRED_OPTIONS = (
     "--json", "--metrics", "--disable-version-check", "--oss-only", "--no-autofix", "--no-git-ignore",
+    "--exclude",
 )
 _VERSION_PATTERN = re.compile(r"\b\d+\.\d+\.\d+\b")
 _FIRESTORE_RULE_ID = "baseline.firestore-unconditional-write"
@@ -369,7 +371,9 @@ class SemgrepAdapter:
                     return _ScanOutput(ScanResult(ScanStatus.EXECUTION_FAILED, issues=("verbose_option_unsupported",), semgrep_version=version))
                 args = [
                     executable, "scan", "--json", "--metrics=off", "--disable-version-check",
-                    "--oss-only", "--no-autofix", "--no-git-ignore", "--config", rules.name, "--", str(project),
+                    "--oss-only", "--no-autofix", "--no-git-ignore",
+                    *(f"--exclude={name}" for name in ADAPTER_EXCLUDED_NAMES),
+                    "--config", rules.name, "--", str(project),
                 ]
                 if investigation_verbose:
                     args.insert(2, "--verbose")

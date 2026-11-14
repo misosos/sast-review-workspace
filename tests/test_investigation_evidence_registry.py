@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import os
 import shutil
 import sys
@@ -34,6 +35,11 @@ from ai_code_security_analyzer.rule_bytes_identity import (
     RULE_BYTES_OBSERVATION_VERSION,
     RuleBytesComparison,
     RuleBytesObservation,
+)
+from ai_code_security_analyzer.scan_evidence_manifest import (
+    EvidenceStatus,
+    SkippedPathEvidence,
+    unavailable_scope_evidence,
 )
 from test_finding_disappearance_evaluator import bundle, finding
 
@@ -293,6 +299,53 @@ def test_canonical_serialization_is_strict_and_round_trips() -> None:
     ):
         with pytest.raises(EvidenceRegistryError):
             deserialize_run_evidence(raw)
+
+
+def test_adapter_exclusion_skip_evidence_round_trips() -> None:
+    run = bundle(
+        finding("a"),
+        skipped=(SkippedPathEvidence("node_modules", "adapter_policy_exclusion"),),
+        skipped_status=EvidenceStatus.OBSERVED,
+    )
+    assert deserialize_run_evidence(serialize_run_evidence(run)) == run
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "semgrep_timeout_without_json", "semgrep_output_limit", "invalid_json_after_failed_execution",
+        "invalid_json", "scope_capture_failed", "adapter_scope_evidence_not_provided",
+        "manifest_capture_failed",
+    ],
+)
+def test_run_without_usable_scope_evidence_is_evaluated_as_incomparable(reason: str) -> None:
+    """A failed scan must be read back and judged, not fail inside the registry."""
+    registry = RunEvidenceRegistry()
+    baseline = bundle(finding("a"), finding("b", "src/b.js"), scanned=("src/a.js", "src/b.js"))
+    failed = bundle(status=ScanStatus.TIMED_OUT, scanned=())
+    failed = bind_run_evidence(
+        failed.response, replace(failed.manifest, scope_evidence=unavailable_scope_evidence(reason))
+    )
+    assert deserialize_run_evidence(serialize_run_evidence(failed)) == failed
+
+    session = registry.create_session(
+        registry.register_run(baseline.response, baseline.manifest),
+        registry.register_run(failed.response, failed.manifest),
+    )
+    evaluation = registry.evaluate(session)
+
+    assert evaluation.comparability is AssessmentStatus.INCOMPARABLE
+    assert evaluation.overall_assessment is AssessmentStatus.INCOMPARABLE
+    assert "scan_incomplete" in evaluation.limitation_codes
+
+
+def test_unknown_limitation_code_is_still_rejected() -> None:
+    run = bundle(finding("a"))
+    forged = bind_run_evidence(
+        run.response, replace(run.manifest, scope_evidence=unavailable_scope_evidence("made_up_reason"))
+    )
+    with pytest.raises(EvidenceRegistryError):
+        deserialize_run_evidence(serialize_run_evidence(forged))
 
 
 def test_unknown_fields_and_malformed_nested_manifest_are_rejected() -> None:

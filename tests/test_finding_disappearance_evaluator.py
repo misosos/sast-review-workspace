@@ -126,6 +126,42 @@ def test_mixed_default_and_investigation_invocations_are_incomparable() -> None:
     assert "scan_context_mismatch" in result.limitation_codes
 
 
+def test_adapter_exclusions_keep_completed_scans_comparable_without_explaining_a_disappearance() -> None:
+    policy = (
+        SkippedPathEvidence(".git", "adapter_policy_exclusion"),
+        SkippedPathEvidence("node_modules", "adapter_policy_exclusion"),
+    )
+    baseline = bundle(
+        finding("a"), finding("b", "src/b.js"), scanned=("src/a.js", "src/b.js"),
+        skipped=policy, skipped_status=EvidenceStatus.OBSERVED,
+    )
+    current = bundle(
+        finding("a"), scanned=("src/a.js",), skipped=policy, skipped_status=EvidenceStatus.OBSERVED,
+    )
+    result = evaluate_finding_disappearance(baseline, current)
+
+    assert result.comparability is AssessmentStatus.COMPARABLE
+    assert result.overall_assessment is AssessmentStatus.UNDETERMINED
+    gone = next(item for item in result.findings if item.category is FindingCategory.BASELINE_ONLY)
+    assert gone.path_observation is PathObservation.PATH_NOT_REPORTED
+    assert gone.skip_hypothesis is AssessmentStatus.UNDETERMINED
+    assert "scope_completeness_unverified" in result.limitation_codes
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        SkippedPathEvidence("src/b.js", "adapter_policy_exclusion"),
+        SkippedPathEvidence("node_modules", "semgrepignore_patterns_match"),
+        SkippedPathEvidence("node_modules", "cli_exclude_flags_match"),
+        SkippedPathEvidence("src/b.js", "analysis_failed_parser_or_internal_error"),
+    ],
+)
+def test_non_canonical_skip_reason_is_refused_as_run_evidence(forged: SkippedPathEvidence) -> None:
+    with pytest.raises(BundleBindingError):
+        bundle(scanned=("src/a.js",), skipped=(forged,), skipped_status=EvidenceStatus.OBSERVED)
+
+
 def test_explicit_current_skip_supports_only_narrow_procedure_observation() -> None:
     baseline = bundle(finding("b", "src/b.js"), scanned=("src/a.js", "src/b.js"))
     current = bundle(

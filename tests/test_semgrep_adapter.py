@@ -42,7 +42,7 @@ def fake_semgrep(monkeypatch: pytest.MonkeyPatch, scan_output: bytes, *, exit_co
             return semgrep_adapter._ProcessResult(0, b"1.160.0\n")
         if args[1:] == ["scan", "--help"]:
             return semgrep_adapter._ProcessResult(
-                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore --verbose"
+                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore --exclude --verbose"
             )
         return semgrep_adapter._ProcessResult(exit_code, scan_output)
 
@@ -87,9 +87,9 @@ def test_investigation_verbose_option_is_explicit_and_keeps_skip_as_partial(
     calls = fake_semgrep(monkeypatch, json.dumps(payload).encode())
     output = adapter._scan_with_evidence(target, rules, investigation_verbose=True)
     args = calls[-1][0]
-    assert args[1:10] == [
+    assert args[1:13] == [
         "scan", "--verbose", "--json", "--metrics=off", "--disable-version-check", "--oss-only", "--no-autofix",
-        "--no-git-ignore", "--config",
+        "--no-git-ignore", "--exclude=.git", "--exclude=node_modules", "--exclude=.venv", "--config",
     ]
     assert output.result.status is ScanStatus.PARTIAL
     assert output.result.issues == ("semgrep_skipped_paths",)
@@ -110,7 +110,7 @@ def test_investigation_verbose_requires_supported_cli_option(
             return semgrep_adapter._ProcessResult(0, b"1.182.1")
         if args[1:] == ["scan", "--help"]:
             return semgrep_adapter._ProcessResult(
-                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore"
+                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore --exclude"
             )
         raise AssertionError("Semgrep scan must not execute when verbose is unsupported")
 
@@ -248,13 +248,49 @@ def test_scan_without_git_ignore_support_fails_closed(
         if args[1:] == ["--version"]:
             return semgrep_adapter._ProcessResult(0, b"1.182.1")
         if args[1:] == ["scan", "--help"]:
-            return semgrep_adapter._ProcessResult(0, b"--json --metrics --disable-version-check --oss-only --no-autofix")
+            return semgrep_adapter._ProcessResult(
+                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --exclude"
+            )
         raise AssertionError("Semgrep must not scan when it cannot be told to leave Git alone")
 
     monkeypatch.setattr(semgrep_adapter, "_run_process", run)
     scanned = adapter.scan(target, rules)
     assert scanned.status is ScanStatus.EXECUTION_FAILED
     assert scanned.issues == ("required_option_unsupported",)
+
+
+def test_scan_without_exclude_support_fails_closed(
+    paths: tuple[SemgrepAdapter, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, target, rules = paths
+    monkeypatch.setattr(semgrep_adapter.shutil, "which", lambda _: "/trusted/semgrep")
+
+    def run(args: list[str], cwd: Path, env: dict[str, str], timeout: int) -> semgrep_adapter._ProcessResult:
+        if args[1:] == ["--version"]:
+            return semgrep_adapter._ProcessResult(0, b"1.182.1")
+        if args[1:] == ["scan", "--help"]:
+            return semgrep_adapter._ProcessResult(
+                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore"
+            )
+        raise AssertionError("Semgrep must not scan when the adapter's exclusions cannot be applied")
+
+    monkeypatch.setattr(semgrep_adapter, "_run_process", run)
+    scanned = adapter.scan(target, rules)
+    assert scanned.status is ScanStatus.EXECUTION_FAILED
+    assert scanned.issues == ("required_option_unsupported",)
+
+
+def test_adapter_exclusions_are_fixed_and_precede_the_target(
+    paths: tuple[SemgrepAdapter, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, target, rules = paths
+    calls = fake_semgrep(monkeypatch, finding_json())
+    adapter.scan(target, rules)
+    args = calls[-1][0]
+    excludes = [item for item in args if item.startswith("--exclude")]
+    assert excludes == ["--exclude=.git", "--exclude=node_modules", "--exclude=.venv"]
+    assert all(args.index(item) < args.index("--") for item in excludes)
+    assert not any(item.startswith("--include") for item in args)
 
 
 def test_every_semgrep_process_gets_a_git_isolated_environment(
@@ -276,7 +312,7 @@ def test_every_semgrep_process_gets_a_git_isolated_environment(
             return semgrep_adapter._ProcessResult(0, b"1.182.1")
         if args[1:] == ["scan", "--help"]:
             return semgrep_adapter._ProcessResult(
-                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore"
+                0, b"--json --metrics --disable-version-check --oss-only --no-autofix --no-git-ignore --exclude"
             )
         scan_arguments.append(args)
         return semgrep_adapter._ProcessResult(0, b'{"results": [], "errors": []}')

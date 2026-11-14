@@ -27,7 +27,7 @@ from ai_code_security_analyzer.scan_evidence_manifest import (
     ScanEvidenceManifest,
     ScopeEvidence,
     SkippedPathEvidence,
-    _KNOWN_SKIP_REASONS,
+    stored_skip_is_valid,
 )
 from ai_code_security_analyzer.semgrep_adapter import ScanStatus
 
@@ -221,11 +221,7 @@ def _scope_is_valid(scope: object) -> bool:
         for item in scope.skipped_paths:
             if not isinstance(item, SkippedPathEvidence):
                 return False
-            if (
-                not _safe_relative_path(item.path)
-                or not isinstance(item.reason_code, str)
-                or item.reason_code not in _KNOWN_SKIP_REASONS
-            ):
+            if not _safe_relative_path(item.path) or not stored_skip_is_valid(item.path, item.reason_code):
                 return False
             key = unicodedata.normalize("NFC", item.path)
             if key in seen:

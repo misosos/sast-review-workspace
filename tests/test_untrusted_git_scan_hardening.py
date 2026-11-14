@@ -223,12 +223,8 @@ def test_api_scan_of_git_repository_does_not_run_its_configuration(tmp_path: Pat
     assert not marker.exists()
 
 
-def test_investigation_scan_reports_the_skipped_git_directory(tmp_path: Path) -> None:
-    """Semgrep now walks the folder itself and reports ``.git`` as skipped.
-
-    The verbose investigation run therefore stays ``partial`` for a Git
-    repository instead of presenting an unreported omission as completeness.
-    """
+def test_investigation_scan_records_the_git_directory_as_an_adapter_exclusion(tmp_path: Path) -> None:
+    """Semgrep walks the folder itself, so ``.git`` is excluded by the adapter and recorded."""
     git = _require_git()
     _require_semgrep()
     target, _, marker = _build("own_config", tmp_path, git)
@@ -237,10 +233,10 @@ def test_investigation_scan_reports_the_skipped_git_directory(tmp_path: Path) ->
 
     assert not marker.exists()
     assert _eval_files(output) == {"src/app.js"}
-    assert output.result.status is ScanStatus.PARTIAL
-    assert output.result.issues == ("semgrep_skipped_paths",)
+    assert output.result.status is ScanStatus.COMPLETED
+    assert output.result.issues == ()
     assert [(item.path, item.reason_code) for item in output.scope_evidence.skipped_paths] == [
-        (".git", "semgrepignore_patterns_match")
+        (".git", "adapter_policy_exclusion")
     ]
 
 
@@ -281,12 +277,11 @@ def test_scan_scope_no_longer_depends_on_git_or_gitignore(tmp_path: Path) -> Non
     assert _scanned(adapter._scan_with_evidence(target, BASELINE)) == expected
 
 
-def test_project_semgrepignore_still_applies_and_replaces_default_ignores(tmp_path: Path) -> None:
-    """Known scope limit: a project's own ``.semgrepignore`` replaces Semgrep's defaults.
+def test_project_semgrepignore_still_applies_but_cannot_expose_dependencies(tmp_path: Path) -> None:
+    """A project's own ``.semgrepignore`` replaces Semgrep's default ignore list.
 
-    With Git no longer filtering gitignored paths, a dependency folder that the
-    project's file does not list is scanned.  The file can only narrow or widen
-    coverage; it is never relied on for safety.
+    It still narrows the scan, but the dependency folder stays out because the
+    adapter excludes it. The file is never relied on for safety.
     """
     git = _require_git()
     _require_semgrep()
@@ -304,7 +299,7 @@ def test_project_semgrepignore_still_applies_and_replaces_default_ignores(tmp_pa
     output = SemgrepAdapter(RULES)._scan_with_evidence(target, BASELINE)
 
     assert output.result.status is ScanStatus.COMPLETED
-    assert _scanned(output) == {"src/app.js", "node_modules/pkg/index.js"}
+    assert _scanned(output) == {"src/app.js"}
 
 
 def test_links_to_files_outside_the_target_are_not_followed(tmp_path: Path) -> None:
